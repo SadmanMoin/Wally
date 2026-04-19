@@ -1,0 +1,3 @@
+
+# Required Python packages for the Wallpaper Changer application
+PySide6>=6.6
