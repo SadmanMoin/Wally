@@ -12,6 +12,7 @@ from src.services.logger import AppLogger
 from src.services.settings_manager import SettingsManager
 from src.ui.main_window import MainWindow
 from src.ui.styles import WINDOWS11_STYLE
+from src.usage_tracker.service import UsageTrackerService
 from src.utils.icon_loader import load_app_icon
 
 
@@ -56,6 +57,12 @@ def run() -> int:
     settings = SettingsManager()
     controller = WallpaperController()
     service = WallpaperService(controller, logger)
+    usage_service = UsageTrackerService(
+        logger=logger,
+        idle_timeout_seconds=settings.get_idle_timeout_minutes() * 60,
+    )
+    if settings.get_usage_tracking_enabled():
+        usage_service.start()
     icon = load_app_icon()
 
     window = MainWindow(
@@ -64,6 +71,7 @@ def run() -> int:
         service=service,
         settings=settings,
         logger=logger,
+        usage_service=usage_service,
     )
     window.show()
 

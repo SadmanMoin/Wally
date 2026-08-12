@@ -44,11 +44,13 @@ from src.ui.layout_helpers import (
     configure_expanding,
 )
 from src.ui.tray_icon import TrayIconController
+from src.ui.usage_dashboard import UsageDashboard
 from src.ui.widgets.log_panel import LogPanel
 from src.ui.widgets.preview_panel import PreviewPanel
 from src.ui.widgets.sidebar import Sidebar
 from src.ui.widgets.status_card import StatusCard
 from src.ui.widgets.toast import ToastHost
+from src.usage_tracker.service import UsageTrackerService
 
 # Interval presets: (label, seconds). None seconds = custom.
 INTERVAL_PRESETS = [
@@ -71,6 +73,7 @@ class MainWindow(QMainWindow):
         service: WallpaperService,
         settings: SettingsManager,
         logger: AppLogger,
+        usage_service: Optional[UsageTrackerService] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -84,6 +87,7 @@ class MainWindow(QMainWindow):
         self._service = service
         self._settings = settings
         self._logger = logger
+        self._usage_service = usage_service
         self._logger.add_listener(self._on_log_message)
         self._tray = TrayIconController(icon, self)
         self._preset_buttons: Dict[int, QPushButton] = {}
@@ -115,6 +119,7 @@ class MainWindow(QMainWindow):
                 ("home", "Home"),
                 ("wallpapers", "Wallpapers"),
                 ("schedule", "Schedule"),
+                ("usage", "Application Usage"),
                 ("settings", "Settings"),
                 ("about", "About"),
             ]
@@ -128,13 +133,15 @@ class MainWindow(QMainWindow):
             "home": 0,
             "wallpapers": 1,
             "schedule": 2,
-            "settings": 3,
-            "about": 4,
+            "usage": 3,
+            "settings": 4,
+            "about": 5,
         }
 
         self.stack.addWidget(self._wrap_scroll(self._build_home_page()))
         self.stack.addWidget(self._wrap_scroll(self._build_wallpapers_page()))
         self.stack.addWidget(self._wrap_scroll(self._build_schedule_page()))
+        self.stack.addWidget(self._wrap_scroll(self._build_usage_page()))
         self.stack.addWidget(self._wrap_scroll(self._build_settings_page()))
         self.stack.addWidget(self._wrap_scroll(self._build_about_page()))
 
@@ -466,6 +473,25 @@ class MainWindow(QMainWindow):
         layout.addStretch(1)
         return page
 
+    def _build_usage_page(self) -> QWidget:
+        if self._usage_service is None:
+            # Fallback empty page if service was not provided.
+            page = QWidget()
+            layout = QVBoxLayout(page)
+            layout.setContentsMargins(
+                LAYOUT_MARGIN + 8, LAYOUT_MARGIN + 4, LAYOUT_MARGIN + 8, LAYOUT_MARGIN
+            )
+            layout.addLayout(
+                self._page_header(
+                    "Application Usage",
+                    "Usage tracking is unavailable in this session.",
+                )
+            )
+            return page
+
+        self.usage_dashboard = UsageDashboard(self._usage_service)
+        return self.usage_dashboard
+
     def _build_settings_page(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -506,6 +532,52 @@ class MainWindow(QMainWindow):
         general_layout.addWidget(tray_title)
         general_layout.addWidget(tray_desc)
         layout.addWidget(general)
+
+        # Application usage tracking settings
+        usage_card, usage_layout = self._make_card()
+        usage_title = QLabel("Application Usage")
+        usage_title.setObjectName("sectionTitle")
+        usage_layout.addWidget(usage_title)
+
+        self.usage_tracking_checkbox = QCheckBox("Enable Application Usage Tracking")
+        self.usage_tracking_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
+        usage_desc = QLabel(
+            "Track how long each app is in the foreground. Data stays on this PC "
+            "in a local SQLite database. No keystrokes or content are recorded."
+        )
+        usage_desc.setObjectName("settingsDescription")
+        usage_desc.setWordWrap(True)
+        usage_layout.addWidget(self.usage_tracking_checkbox)
+        usage_layout.addWidget(usage_desc)
+        usage_layout.addSpacing(8)
+
+        idle_row = QHBoxLayout()
+        idle_label = QLabel("Idle timeout (minutes)")
+        idle_label.setObjectName("settingsTitle")
+        self.idle_timeout_spin = QSpinBox()
+        self.idle_timeout_spin.setRange(1, 120)
+        self.idle_timeout_spin.setValue(5)
+        self.idle_timeout_spin.setSuffix(" min")
+        self.idle_timeout_spin.setToolTip(
+            "Stop counting usage after this much keyboard/mouse inactivity."
+        )
+        configure_expanding(self.idle_timeout_spin)
+        idle_row.addWidget(idle_label)
+        idle_row.addWidget(self.idle_timeout_spin, stretch=1)
+        usage_layout.addLayout(idle_row)
+        idle_desc = QLabel(
+            "If you leave the PC idle longer than this, time is not counted toward any app."
+        )
+        idle_desc.setObjectName("settingsDescription")
+        idle_desc.setWordWrap(True)
+        usage_layout.addWidget(idle_desc)
+
+        open_usage = QPushButton("Open Application Usage")
+        configure_action_button(open_usage)
+        open_usage.setCursor(Qt.CursorShape.PointingHandCursor)
+        open_usage.clicked.connect(lambda: self._navigate("usage"))
+        usage_layout.addWidget(open_usage, alignment=Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(usage_card)
 
         wallpaper_card, wallpaper_layout = self._make_card()
         wallpaper_title = QLabel("Wallpaper")
@@ -582,6 +654,7 @@ class MainWindow(QMainWindow):
             "• Image files and multi-folder wallpaper sources\n"
             "• Sequential and random modes\n"
             "• Configurable change interval\n"
+            "• Local application usage tracking\n"
             "• System tray background operation\n"
             "• Optional start with Windows"
         )
@@ -618,6 +691,8 @@ class MainWindow(QMainWindow):
         self.interval_spin.valueChanged.connect(self._on_interval_spin_changed)
         self.mode_combo.currentTextChanged.connect(self._on_schedule_changed)
         self.startup_checkbox.stateChanged.connect(self._on_startup_changed)
+        self.usage_tracking_checkbox.stateChanged.connect(self._on_usage_tracking_changed)
+        self.idle_timeout_spin.valueChanged.connect(self._on_idle_timeout_changed)
 
         self.preview_panel.preview_changed.connect(self._on_preview_navigate)
         self.preview_panel.apply_requested.connect(self._apply_preview_wallpaper)
@@ -671,6 +746,18 @@ class MainWindow(QMainWindow):
         self.startup_checkbox.setChecked(startup_enabled)
         self.startup_checkbox.blockSignals(False)
 
+        usage_enabled = self._settings.get_usage_tracking_enabled()
+        self.usage_tracking_checkbox.blockSignals(True)
+        self.usage_tracking_checkbox.setChecked(usage_enabled)
+        self.usage_tracking_checkbox.blockSignals(False)
+
+        idle_minutes = self._settings.get_idle_timeout_minutes()
+        self.idle_timeout_spin.blockSignals(True)
+        self.idle_timeout_spin.setValue(idle_minutes)
+        self.idle_timeout_spin.blockSignals(False)
+        if self._usage_service is not None:
+            self._usage_service.set_idle_timeout_minutes(idle_minutes)
+
         if folders or files:
             self._reload_wallpapers(show_errors=False)
         else:
@@ -701,6 +788,8 @@ class MainWindow(QMainWindow):
         self._settings.set_interval(self.interval_spin.value())
         self._settings.set_mode(self.mode_combo.currentText())
         self._settings.set_startup_enabled(self.startup_checkbox.isChecked())
+        self._settings.set_usage_tracking_enabled(self.usage_tracking_checkbox.isChecked())
+        self._settings.set_idle_timeout_minutes(self.idle_timeout_spin.value())
         self._settings.set_scheduler_status(self._service.status)
         self._settings.sync()
 
@@ -1140,6 +1229,29 @@ class MainWindow(QMainWindow):
             "success",
         )
 
+    @Slot(int)
+    def _on_usage_tracking_changed(self, state: int) -> None:
+        enabled = state == int(Qt.CheckState.Checked)
+        self._settings.set_usage_tracking_enabled(enabled)
+        if self._usage_service is not None:
+            if enabled:
+                self._usage_service.set_idle_timeout_minutes(self.idle_timeout_spin.value())
+                self._usage_service.start()
+                self._show_toast("Application usage tracking enabled", "success")
+            else:
+                self._usage_service.stop()
+                self._show_toast("Application usage tracking disabled", "info")
+        self._save_settings()
+        self._logger.info("Usage tracking %s.", "enabled" if enabled else "disabled")
+
+    @Slot(int)
+    def _on_idle_timeout_changed(self, minutes: int) -> None:
+        self._settings.set_idle_timeout_minutes(minutes)
+        if self._usage_service is not None:
+            self._usage_service.set_idle_timeout_minutes(minutes)
+        self._save_settings()
+        self._show_toast(f"Idle timeout set to {minutes} min", "success")
+
     def _on_log_message(self, level: str, message: str) -> None:
         self.log_panel.append(level, message)
 
@@ -1161,6 +1273,8 @@ class MainWindow(QMainWindow):
     @Slot()
     def _exit_application(self) -> None:
         self._save_settings()
+        if self._usage_service is not None:
+            self._usage_service.stop()
         self._logger.remove_listener(self._on_log_message)
         self._countdown_timer.stop()
         self._tray.tray_icon.hide()

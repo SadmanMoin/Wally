@@ -366,6 +366,44 @@ QCheckBox::indicator:checked {
 }
 
 /* ── Lists ────────────────────────────────────────────────────────── */
+QTableWidget {
+    background-color: #FAFAFA;
+    border: 1px solid #E5E5E5;
+    border-radius: 8px;
+    gridline-color: transparent;
+    outline: none;
+}
+
+QTableWidget::item {
+    padding: 8px 10px;
+}
+
+QTableWidget::item:selected {
+    background-color: #E8F3FF;
+    color: #1A1A1A;
+}
+
+QHeaderView::section {
+    background-color: #F5F5F5;
+    color: #6B6B6B;
+    border: none;
+    border-bottom: 1px solid #E5E5E5;
+    padding: 8px 10px;
+    font-weight: 600;
+}
+
+QDateEdit {
+    background-color: #FAFAFA;
+    border: 1px solid #D1D1D1;
+    border-radius: 8px;
+    padding: 6px 10px;
+}
+
+QDateEdit:focus {
+    border: 1px solid #0078D4;
+    background-color: #FFFFFF;
+}
+
 QListWidget {
     outline: none;
     background-color: #FAFAFA;

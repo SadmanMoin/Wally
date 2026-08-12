@@ -80,5 +80,20 @@ class SettingsManager:
         self._settings.setValue("scheduler_status", status)
         self._settings.setValue("scheduler_active", status in {"running", "paused"})
 
+    def get_usage_tracking_enabled(self) -> bool:
+        """Whether foreground application usage tracking is enabled."""
+        return self._settings.value("usage_tracking_enabled", True, type=bool)
+
+    def set_usage_tracking_enabled(self, enabled: bool) -> None:
+        self._settings.setValue("usage_tracking_enabled", enabled)
+
+    def get_idle_timeout_minutes(self) -> int:
+        """Minutes of user inactivity before usage counting pauses."""
+        value = int(self._settings.value("idle_timeout_minutes", 5))
+        return max(1, min(value, 120))
+
+    def set_idle_timeout_minutes(self, minutes: int) -> None:
+        self._settings.setValue("idle_timeout_minutes", max(1, min(int(minutes), 120)))
+
     def sync(self) -> None:
         self._settings.sync()
