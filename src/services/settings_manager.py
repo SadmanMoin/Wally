@@ -95,5 +95,24 @@ class SettingsManager:
     def set_idle_timeout_minutes(self, minutes: int) -> None:
         self._settings.setValue("idle_timeout_minutes", max(1, min(int(minutes), 120)))
 
+    def get_live_media_path(self) -> str:
+        value = self._settings.value("live_media_path", "", type=str)
+        return value or ""
+
+    def set_live_media_path(self, path: str) -> None:
+        self._settings.setValue("live_media_path", path or "")
+
+    def get_live_enabled(self) -> bool:
+        return self._settings.value("live_enabled", False, type=bool)
+
+    def set_live_enabled(self, enabled: bool) -> None:
+        self._settings.setValue("live_enabled", enabled)
+
+    def get_live_muted(self) -> bool:
+        return self._settings.value("live_muted", True, type=bool)
+
+    def set_live_muted(self, muted: bool) -> None:
+        self._settings.setValue("live_muted", muted)
+
     def sync(self) -> None:
         self._settings.sync()

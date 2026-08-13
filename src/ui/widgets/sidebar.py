@@ -39,11 +39,11 @@ class Sidebar(QFrame):
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
 
-        brand = QLabel("Wallpaper Changer")
+        brand = QLabel("Wally")
         brand.setObjectName("sidebarBrand")
         brand.setWordWrap(True)
 
-        tagline = QLabel("Desktop wallpaper utility")
+        tagline = QLabel("Wallpaper & usage utility")
         tagline.setObjectName("sidebarTagline")
         tagline.setWordWrap(True)
 

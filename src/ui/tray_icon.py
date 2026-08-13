@@ -14,7 +14,7 @@ class TrayIconController:
     def __init__(self, icon: QIcon, parent: Optional[QWidget] = None) -> None:
         self._parent = parent
         self.tray_icon = QSystemTrayIcon(icon, parent)
-        self.tray_icon.setToolTip("Wallpaper Changer")
+        self.tray_icon.setToolTip("Wally")
 
         self.action_open = QAction("Open", parent)
         self.action_change_now = QAction("Change Wallpaper Now", parent)

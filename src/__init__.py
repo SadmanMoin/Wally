@@ -1,1 +1,1 @@
-"""Wallpaper Changer application package."""
+"""Wally application package."""

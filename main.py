@@ -1,9 +1,9 @@
 """
-Wallpaper Changer
-=================
+Wally
+=====
 
-A modern Windows desktop application that rotates wallpapers on a schedule.
-Runs as a GUI application with system tray support and no console window.
+A modern Windows desktop application that rotates wallpapers on a schedule
+and tracks local application usage. Runs with system tray support.
 
 Build with PyInstaller:
     pyinstaller main.spec

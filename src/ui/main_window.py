@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.core.live_wallpaper.service import LiveWallpaperService
 from src.core.wallpaper_controller import WallpaperController
 from src.core.wallpaper_service import WallpaperService
 from src.core.windows_wallpaper import set_windows_wallpaper
@@ -43,6 +44,8 @@ from src.ui.layout_helpers import (
     configure_action_button,
     configure_expanding,
 )
+from src.ui.live_wallpaper_page import LiveWallpaperPage
+from src.ui.theme import apply_theme_to_app
 from src.ui.tray_icon import TrayIconController
 from src.ui.usage_dashboard import UsageDashboard
 from src.ui.widgets.log_panel import LogPanel
@@ -74,10 +77,11 @@ class MainWindow(QMainWindow):
         settings: SettingsManager,
         logger: AppLogger,
         usage_service: Optional[UsageTrackerService] = None,
+        live_service: Optional[LiveWallpaperService] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Wallpaper Changer")
+        self.setWindowTitle("Wally")
         self.setWindowIcon(icon)
         self.setMinimumSize(900, 600)
         self.resize(1120, 740)
@@ -88,6 +92,7 @@ class MainWindow(QMainWindow):
         self._settings = settings
         self._logger = logger
         self._usage_service = usage_service
+        self._live_service = live_service
         self._logger.add_listener(self._on_log_message)
         self._tray = TrayIconController(icon, self)
         self._preset_buttons: Dict[int, QPushButton] = {}
@@ -118,6 +123,7 @@ class MainWindow(QMainWindow):
             [
                 ("home", "Home"),
                 ("wallpapers", "Wallpapers"),
+                ("live", "Live Wallpaper"),
                 ("schedule", "Schedule"),
                 ("usage", "Application Usage"),
                 ("settings", "Settings"),
@@ -132,14 +138,16 @@ class MainWindow(QMainWindow):
         self._page_index = {
             "home": 0,
             "wallpapers": 1,
-            "schedule": 2,
-            "usage": 3,
-            "settings": 4,
-            "about": 5,
+            "live": 2,
+            "schedule": 3,
+            "usage": 4,
+            "settings": 5,
+            "about": 6,
         }
 
         self.stack.addWidget(self._wrap_scroll(self._build_home_page()))
         self.stack.addWidget(self._wrap_scroll(self._build_wallpapers_page()))
+        self.stack.addWidget(self._wrap_scroll(self._build_live_page()))
         self.stack.addWidget(self._wrap_scroll(self._build_schedule_page()))
         self.stack.addWidget(self._wrap_scroll(self._build_usage_page()))
         self.stack.addWidget(self._wrap_scroll(self._build_settings_page()))
@@ -473,6 +481,29 @@ class MainWindow(QMainWindow):
         layout.addStretch(1)
         return page
 
+    def _build_live_page(self) -> QWidget:
+        if self._live_service is None:
+            page = QWidget()
+            layout = QVBoxLayout(page)
+            layout.setContentsMargins(
+                LAYOUT_MARGIN + 8, LAYOUT_MARGIN + 4, LAYOUT_MARGIN + 8, LAYOUT_MARGIN
+            )
+            layout.addLayout(
+                self._page_header(
+                    "Live Wallpaper",
+                    "Live wallpaper is unavailable in this session.",
+                )
+            )
+            return page
+
+        self.live_page = LiveWallpaperPage(self._live_service)
+        self.live_page.request_start.connect(self.start_live_wallpaper)
+        self.live_page.request_stop.connect(self.stop_live_wallpaper)
+        self.live_page.mute_changed.connect(self._on_live_mute_changed)
+        self.live_page.toast.connect(self._show_toast)
+        self.live_page.error.connect(self._show_error)
+        return self.live_page
+
     def _build_usage_page(self) -> QWidget:
         if self._usage_service is None:
             # Fallback empty page if service was not provided.
@@ -512,7 +543,7 @@ class MainWindow(QMainWindow):
         self.startup_checkbox = QCheckBox("Start with Windows")
         self.startup_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
         startup_desc = QLabel(
-            "Launch Wallpaper Changer automatically when you sign in to Windows."
+            "Launch Wally automatically when you sign in to Windows."
         )
         startup_desc.setObjectName("settingsDescription")
         startup_desc.setWordWrap(True)
@@ -632,17 +663,18 @@ class MainWindow(QMainWindow):
         layout.addLayout(
             self._page_header(
                 "About",
-                "Wallpaper Changer — a lightweight Windows desktop utility.",
+                "Wally — wallpaper rotation and local app usage tracking.",
             )
         )
 
         about_card, about_layout = self._make_card()
-        about_title = QLabel("Wallpaper Changer")
+        about_title = QLabel("Wally")
         about_title.setObjectName("sectionTitle")
         about_body = QLabel(
             "Automatically change your desktop wallpaper on a schedule. "
             "Select image files or folders, choose sequential or random rotation, "
-            "and keep the app running quietly in the system tray."
+            "track local application usage, and keep Wally running in the system tray. "
+            "The app theme follows your current wallpaper colors."
         )
         about_body.setObjectName("settingsDescription")
         about_body.setWordWrap(True)
@@ -652,9 +684,11 @@ class MainWindow(QMainWindow):
 
         features = QLabel(
             "• Image files and multi-folder wallpaper sources\n"
+            "• Live wallpaper (video) behind desktop icons\n"
             "• Sequential and random modes\n"
             "• Configurable change interval\n"
             "• Local application usage tracking\n"
+            "• Theme colors from current wallpaper\n"
             "• System tray background operation\n"
             "• Optional start with Windows"
         )
@@ -700,6 +734,10 @@ class MainWindow(QMainWindow):
         self._service.wallpaper_changed.connect(self._on_wallpaper_changed)
         self._service.status_changed.connect(self._on_status_changed)
         self._service.error_occurred.connect(self._show_error)
+
+        if self._live_service is not None:
+            self._live_service.error_occurred.connect(self._show_error)
+            self._live_service.status_changed.connect(self._on_live_status_changed)
 
         self._tray.action_open.triggered.connect(self.show_window)
         self._tray.action_change_now.triggered.connect(self._change_wallpaper_now)
@@ -767,7 +805,15 @@ class MainWindow(QMainWindow):
         self._apply_schedule_to_service()
         self._update_control_states(self._service.status)
 
-        if self._settings.get_scheduler_active() and self._controller.image_count > 0:
+        # Prefer live wallpaper restore over static scheduler (exclusive modes).
+        restore_live = self._settings.get_live_enabled() and bool(
+            self._settings.get_live_media_path()
+        )
+        if (
+            not restore_live
+            and self._settings.get_scheduler_active()
+            and self._controller.image_count > 0
+        ):
             restored_status = self._settings.get_scheduler_status()
             try:
                 if restored_status == WallpaperService.STATUS_RUNNING:
@@ -778,7 +824,12 @@ class MainWindow(QMainWindow):
             except Exception as exc:
                 self._logger.warning("Could not restore scheduler state: %s", exc)
 
-        self._logger.info("Application started. Log file: %s", self._logger.log_path)
+        # Theme from current wallpaper (service current or first loaded preview).
+        theme_path = self._service.current_image or self.preview_panel.current_path
+        if theme_path:
+            self._apply_wallpaper_theme(theme_path)
+
+        self._logger.info("Wally started. Log file: %s", self._logger.log_path)
         self._refresh_status_details()
 
     def _save_settings(self) -> None:
@@ -791,6 +842,11 @@ class MainWindow(QMainWindow):
         self._settings.set_usage_tracking_enabled(self.usage_tracking_checkbox.isChecked())
         self._settings.set_idle_timeout_minutes(self.idle_timeout_spin.value())
         self._settings.set_scheduler_status(self._service.status)
+        if self._live_service is not None:
+            self._settings.set_live_enabled(self._live_service.is_active)
+            if self._live_service.media_path:
+                self._settings.set_live_media_path(self._live_service.media_path)
+            self._settings.set_live_muted(self._live_service.muted)
         self._settings.sync()
 
     def _add_source_item(self, source_type: str, path: str) -> None:
@@ -868,6 +924,8 @@ class MainWindow(QMainWindow):
         )
         preview_path = self._controller.preview_at(0)
         self.preview_panel.set_preview(preview_path)
+        if preview_path and not self._service.current_image:
+            self._apply_wallpaper_theme(preview_path)
         self._save_settings()
         self._refresh_status_details()
         return True
@@ -1038,6 +1096,11 @@ class MainWindow(QMainWindow):
             )
             return
 
+        # Static scheduler and live wallpaper are exclusive.
+        if self._live_service is not None and self._live_service.is_active:
+            self._live_service.stop()
+            self._settings.set_live_enabled(False)
+
         self._apply_schedule_to_service()
         try:
             self._service.start()
@@ -1047,6 +1110,57 @@ class MainWindow(QMainWindow):
 
         self._save_settings()
         self._show_toast("Scheduler started", "success")
+
+    @Slot(str)
+    def start_live_wallpaper(self, media_path: str, restore: bool = False) -> None:
+        """Start live wallpaper; pauses static scheduler if needed."""
+        if self._live_service is None:
+            self._show_error("Live wallpaper is unavailable.")
+            return
+        if not media_path:
+            self._show_error("Select a video first.")
+            return
+
+        if self._service.status != WallpaperService.STATUS_STOPPED:
+            self._service.stop()
+
+        self._live_service.set_muted(self._settings.get_live_muted())
+        if not self._live_service.start(media_path):
+            if not restore:
+                # Errors already emitted via signal.
+                return
+            self._logger.warning("Could not restore live wallpaper: %s", media_path)
+            return
+
+        self._settings.set_live_media_path(media_path)
+        self._settings.set_live_enabled(True)
+        self._save_settings()
+        if not restore:
+            self._show_toast("Live wallpaper started", "success")
+
+    @Slot()
+    def stop_live_wallpaper(self) -> None:
+        if self._live_service is None:
+            return
+        self._live_service.stop()
+        self._settings.set_live_enabled(False)
+        self._save_settings()
+        self._show_toast("Live wallpaper stopped", "info")
+
+    @Slot(bool)
+    def _on_live_mute_changed(self, muted: bool) -> None:
+        if self._live_service is not None:
+            self._live_service.set_muted(muted)
+        self._settings.set_live_muted(muted)
+        self._save_settings()
+
+    @Slot(bool)
+    def _on_live_status_changed(self, active: bool) -> None:
+        self._settings.set_live_enabled(active)
+        if not active:
+            # Keep last media path for restore, only clear active flag.
+            pass
+        self._save_settings()
 
     @Slot()
     def _pause_scheduler(self) -> None:
@@ -1118,9 +1232,22 @@ class MainWindow(QMainWindow):
     def _on_wallpaper_changed(self, image_path: str) -> None:
         filename = os.path.basename(image_path)
         self.preview_panel.set_preview(image_path)
-        self._tray.notify("Wallpaper Changed", filename)
+        # Apply theme immediately and once more shortly after so scheduled
+        # changes always restyle (file/IO and paint can lag slightly).
+        self._apply_wallpaper_theme(image_path)
+        QTimer.singleShot(120, lambda p=image_path: self._apply_wallpaper_theme(p))
+        self._tray.notify("Wally", filename)
         self._refresh_status_details()
         self._show_toast("Wallpaper changed successfully", "success")
+
+    def _apply_wallpaper_theme(self, image_path: Optional[str]) -> None:
+        """Restyle the UI using colors sampled from the active wallpaper."""
+        if not image_path or not os.path.isfile(image_path):
+            return
+        try:
+            apply_theme_to_app(image_path)
+        except Exception as exc:
+            self._logger.warning("Could not apply wallpaper theme: %s", exc)
 
     @Slot(str)
     def _on_status_changed(self, status: str) -> None:
@@ -1210,9 +1337,9 @@ class MainWindow(QMainWindow):
             status == WallpaperService.STATUS_STOPPED and self._controller.image_count == 0
         )
 
-    @Slot(int)
-    def _on_startup_changed(self, state: int) -> None:
-        enabled = state == int(Qt.CheckState.Checked)
+    @Slot()
+    def _on_startup_changed(self, state=None) -> None:
+        enabled = self.startup_checkbox.isChecked()
         success, error_message = StartupManager.set_enabled(enabled)
         if not success:
             self.startup_checkbox.blockSignals(True)
@@ -1229,9 +1356,9 @@ class MainWindow(QMainWindow):
             "success",
         )
 
-    @Slot(int)
-    def _on_usage_tracking_changed(self, state: int) -> None:
-        enabled = state == int(Qt.CheckState.Checked)
+    @Slot()
+    def _on_usage_tracking_changed(self, state=None) -> None:
+        enabled = self.usage_tracking_checkbox.isChecked()
         self._settings.set_usage_tracking_enabled(enabled)
         if self._usage_service is not None:
             if enabled:
@@ -1262,7 +1389,7 @@ class MainWindow(QMainWindow):
     def _show_error(self, message: str) -> None:
         self._logger.error(message)
         self._show_toast(message, "error")
-        QMessageBox.warning(self, "Wallpaper Changer", message)
+        QMessageBox.warning(self, "Wally", message)
 
     @Slot()
     def show_window(self) -> None:
@@ -1273,6 +1400,15 @@ class MainWindow(QMainWindow):
     @Slot()
     def _exit_application(self) -> None:
         self._save_settings()
+        if self._live_service is not None:
+            # Leave live_enabled as saved preference, but detach desktop host cleanly.
+            was_live = self._live_service.is_active
+            media = self._live_service.media_path
+            self._live_service.stop(emit_status=False)
+            if was_live and media:
+                self._settings.set_live_enabled(True)
+                self._settings.set_live_media_path(media)
+                self._settings.sync()
         if self._usage_service is not None:
             self._usage_service.stop()
         self._logger.remove_listener(self._on_log_message)
@@ -1303,8 +1439,8 @@ class MainWindow(QMainWindow):
             event.ignore()
             self.hide()
             self._tray.notify(
-                "Wallpaper Changer",
-                "The app is still running in the system tray.",
+                "Wally",
+                "Wally is still running in the system tray.",
             )
             return
 

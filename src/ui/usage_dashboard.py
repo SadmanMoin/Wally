@@ -36,6 +36,7 @@ class UsageDashboard(QWidget):
         super().__init__(parent)
         self._service = usage_service
         self._building = False
+        self._selected_day: Optional[date] = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(
@@ -83,12 +84,17 @@ class UsageDashboard(QWidget):
         self.end_date.setDate(QDate.currentDate())
         self._set_custom_dates_enabled(False)
 
+        from_label = QLabel("From")
+        from_label.setObjectName("metaLabel")
+        to_label = QLabel("To")
+        to_label.setObjectName("metaLabel")
+
         filter_row.addWidget(filter_label)
         filter_row.addWidget(self.period_combo)
         filter_row.addSpacing(12)
-        filter_row.addWidget(QLabel("From"))
+        filter_row.addWidget(from_label)
         filter_row.addWidget(self.start_date)
-        filter_row.addWidget(QLabel("To"))
+        filter_row.addWidget(to_label)
         filter_row.addWidget(self.end_date)
         filter_row.addStretch(1)
 
@@ -150,13 +156,50 @@ class UsageDashboard(QWidget):
         self.dist_chart = DistributionChart()
         dist_layout.addWidget(dist_title)
         dist_layout.addWidget(self.dist_chart)
-        self.trend_chart = VerticalBarChart()
+
         trend_title = QLabel("Daily trend")
         trend_title.setObjectName("sectionTitle")
+        self.trend_chart = VerticalBarChart()
         dist_layout.addWidget(trend_title)
         dist_layout.addWidget(self.trend_chart)
         charts.addWidget(dist_card, stretch=1)
         root.addLayout(charts)
+
+        # Day detail (shown when a daily column is clicked)
+        self.day_detail_card = QFrame()
+        self.day_detail_card.setObjectName("card")
+        day_layout = QVBoxLayout(self.day_detail_card)
+        apply_card_layout(day_layout)
+        self.day_detail_title = QLabel("Day details")
+        self.day_detail_title.setObjectName("sectionTitle")
+        self.day_detail_summary = QLabel("")
+        self.day_detail_summary.setObjectName("mutedText")
+        self.day_detail_summary.setWordWrap(True)
+
+        self.day_table = QTableWidget(0, 4)
+        self.day_table.setHorizontalHeaderLabels(
+            ["Application", "Process", "Time Used", "Percentage"]
+        )
+        self.day_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.day_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.day_table.horizontalHeader().setSectionResizeMode(
+            2, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.day_table.horizontalHeader().setSectionResizeMode(
+            3, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.day_table.verticalHeader().setVisible(False)
+        self.day_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.day_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.day_table.setShowGrid(False)
+        self.day_table.setMinimumHeight(140)
+        self.day_table.setMaximumHeight(220)
+
+        day_layout.addWidget(self.day_detail_title)
+        day_layout.addWidget(self.day_detail_summary)
+        day_layout.addWidget(self.day_table)
+        root.addWidget(self.day_detail_card)
+        self.day_detail_card.hide()
 
         # Table
         table_card = QFrame()
@@ -165,9 +208,11 @@ class UsageDashboard(QWidget):
         apply_card_layout(table_layout)
         table_title = QLabel("Application usage")
         table_title.setObjectName("sectionTitle")
-        table_hint = QLabel("Active (foreground) time only — background apps are not counted.")
-        table_hint.setObjectName("cardHint")
-        table_hint.setWordWrap(True)
+        self.table_hint = QLabel(
+            "Active (foreground) time only — background apps are not counted."
+        )
+        self.table_hint.setObjectName("cardHint")
+        self.table_hint.setWordWrap(True)
 
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(
@@ -192,7 +237,7 @@ class UsageDashboard(QWidget):
         self.table.setShowGrid(False)
 
         table_layout.addWidget(table_title)
-        table_layout.addWidget(table_hint)
+        table_layout.addWidget(self.table_hint)
         table_layout.addWidget(self.table)
         root.addWidget(table_card, stretch=1)
 
@@ -200,12 +245,12 @@ class UsageDashboard(QWidget):
         self.period_combo.currentTextChanged.connect(self._on_period_changed)
         self.start_date.dateChanged.connect(self._on_dates_changed)
         self.end_date.dateChanged.connect(self._on_dates_changed)
+        self.trend_chart.day_clicked.connect(self._on_day_clicked)
         self._service.session_recorded.connect(self.refresh)
         self._service.status_changed.connect(self._on_tracking_status)
         self._service.idle_changed.connect(self._on_idle_changed)
         self._service.current_app_changed.connect(self._on_current_app)
 
-        # Soft auto-refresh while page is shown
         self._refresh_timer = QTimer(self)
         self._refresh_timer.setInterval(15_000)
         self._refresh_timer.timeout.connect(self.refresh)
@@ -250,6 +295,8 @@ class UsageDashboard(QWidget):
             self.start_date.setDate(QDate(start.year, start.month, start.day))
             self.end_date.setDate(QDate(end.year, end.month, end.day))
             self._building = False
+        self._selected_day = None
+        self.day_detail_card.hide()
         self.refresh()
 
     @Slot()
@@ -258,7 +305,79 @@ class UsageDashboard(QWidget):
             return
         if self.period_combo.currentText().strip().lower() != "custom":
             return
+        self._selected_day = None
+        self.day_detail_card.hide()
         self.refresh()
+
+    @Slot(object)
+    def _on_day_clicked(self, day: object) -> None:
+        if not isinstance(day, date):
+            return
+        self._selected_day = day
+        self.trend_chart.set_selected_day(day)
+        self._populate_day_detail(day)
+
+    def _populate_day_detail(self, day: date) -> None:
+        summaries = self._service.summarize(day, day)
+        total = self._service.total_seconds(day, day)
+        pretty = day.strftime("%A, %B %d, %Y")
+        total_text = self._service.format_duration(total)
+
+        self.day_detail_title.setText(f"Day details — {pretty}")
+        if total <= 0:
+            self.day_detail_summary.setText(
+                f"No tracked usage on {pretty}."
+            )
+            self.day_table.setRowCount(0)
+        else:
+            self.day_detail_summary.setText(
+                f"Total active time: {total_text}  ·  {len(summaries)} app"
+                f"{'s' if len(summaries) != 1 else ''}"
+            )
+            self.day_table.setRowCount(len(summaries))
+            for row, item in enumerate(summaries):
+                values = [
+                    item.application_name,
+                    item.process_name,
+                    self._service.format_duration(item.total_seconds),
+                    f"{item.percentage:.0f}%",
+                ]
+                for col, text in enumerate(values):
+                    cell = QTableWidgetItem(text)
+                    if col >= 2:
+                        cell.setTextAlignment(
+                            int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                        )
+                    self.day_table.setItem(row, col, cell)
+
+        self.day_detail_card.show()
+
+        # Also focus the main table on this single day for a full view.
+        self._fill_main_table(summaries)
+        self.table_hint.setText(
+            f"Showing usage for {pretty} only. Change the period filter to return to the range view."
+        )
+        self.total_time_value[1].setText(total_text)
+        self.apps_count_value[1].setText(str(len(summaries)))
+        self.sessions_value[1].setText(
+            str(sum(item.session_count for item in summaries))
+        )
+
+        # Day-scoped top chart / distribution
+        top = summaries[:6]
+        self.top_chart.set_data(
+            [
+                (
+                    s.application_name,
+                    float(s.total_seconds),
+                    self._service.format_duration(s.total_seconds),
+                )
+                for s in top
+            ]
+        )
+        self.dist_chart.set_data(
+            [(s.application_name, float(s.total_seconds)) for s in top]
+        )
 
     @Slot(bool)
     def _on_tracking_status(self, enabled: bool) -> None:
@@ -299,18 +418,7 @@ class UsageDashboard(QWidget):
             return self._service.resolve_range("Custom", start, end)
         return self._service.resolve_range(preset)
 
-    @Slot()
-    def refresh(self) -> None:
-        start, end = self._selected_range()
-        summaries = self._service.summarize(start, end)
-        total = self._service.total_seconds(start, end)
-        sessions = sum(item.session_count for item in summaries)
-
-        self.total_time_value[1].setText(self._service.format_duration(total))
-        self.apps_count_value[1].setText(str(len(summaries)))
-        self.sessions_value[1].setText(str(sessions))
-
-        # Table
+    def _fill_main_table(self, summaries) -> None:
         self.table.setRowCount(len(summaries))
         for row, item in enumerate(summaries):
             values = [
@@ -328,7 +436,32 @@ class UsageDashboard(QWidget):
                     )
                 self.table.setItem(row, col, cell)
 
-        # Top apps chart
+    @Slot()
+    def refresh(self) -> None:
+        start, end = self._selected_range()
+        # If a day is selected and still inside the range, keep day-focused view.
+        if self._selected_day is not None and start <= self._selected_day <= end:
+            trend = self._service.daily_trend(start, end)
+            self._update_trend_chart(trend, start, end)
+            self.trend_chart.set_selected_day(self._selected_day)
+            self._populate_day_detail(self._selected_day)
+            return
+
+        self._selected_day = None
+        self.day_detail_card.hide()
+        self.table_hint.setText(
+            "Active (foreground) time only — background apps are not counted."
+        )
+
+        summaries = self._service.summarize(start, end)
+        total = self._service.total_seconds(start, end)
+        sessions = sum(item.session_count for item in summaries)
+
+        self.total_time_value[1].setText(self._service.format_duration(total))
+        self.apps_count_value[1].setText(str(len(summaries)))
+        self.sessions_value[1].setText(str(sessions))
+        self._fill_main_table(summaries)
+
         top = summaries[:6]
         self.top_chart.set_data(
             [
@@ -344,8 +477,11 @@ class UsageDashboard(QWidget):
             [(s.application_name, float(s.total_seconds)) for s in top]
         )
 
-        # Daily trend
         trend = self._service.daily_trend(start, end)
+        self._update_trend_chart(trend, start, end)
+        self.trend_chart.set_selected_day(None)
+
+    def _update_trend_chart(self, trend, start: date, end: date) -> None:
         span = (end - start).days
         trend_items = []
         for point in trend:
@@ -356,6 +492,11 @@ class UsageDashboard(QWidget):
             else:
                 label = point.day.strftime("%m/%d")
             trend_items.append(
-                (label, float(point.total_seconds), self._service.format_duration(point.total_seconds))
+                (
+                    label,
+                    float(point.total_seconds),
+                    self._service.format_duration(point.total_seconds),
+                    point.day,
+                )
             )
         self.trend_chart.set_data(trend_items)

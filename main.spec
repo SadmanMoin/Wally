@@ -6,7 +6,11 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[
+        ('resources/icon.png', 'resources'),
+        ('resources/icon.ico', 'resources'),
+        ('pwQzX.jpg', '.'),
+    ],
     hiddenimports=['winreg'],
     hookspath=[],
     hooksconfig={},
@@ -27,7 +31,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='WallpaperChanger',
+    name='Wally',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -40,5 +44,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,
+    icon='resources/icon.ico',
 )
